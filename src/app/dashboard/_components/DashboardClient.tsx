@@ -9,7 +9,7 @@ import type { DocumentMeta } from '@/types'
 
 interface Props {
   documents: DocumentMeta[]
-  user: { id: string; full_name?: string | null; email: string; avatar_url?: string | null }
+  user: { id: string; full_name?: string | null; email?: string; avatar_url?: string | null }
 }
 
 export default function DashboardClient({ documents: initialDocs, user }: Props) {

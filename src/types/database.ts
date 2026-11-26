@@ -37,6 +37,7 @@ export type Database = {
           avatar_url?: string | null
           updated_at?: string
         }
+        Relationships: []
       }
       documents: {
         Row: {
@@ -61,6 +62,7 @@ export type Database = {
           content_text?: string | null
           updated_at?: string
         }
+        Relationships: []
       }
       document_collaborators: {
         Row: {
@@ -78,8 +80,11 @@ export type Database = {
         Update: {
           role?: 'viewer' | 'editor' | 'owner'
         }
+        Relationships: []
       }
     }
+    Views: Record<string, never>
+    Functions: Record<string, never>
   }
 }
 
