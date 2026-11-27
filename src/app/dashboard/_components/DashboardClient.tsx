@@ -1,8 +1,21 @@
 'use client'
 
-import { useState, useOptimistic, useTransition } from 'react'
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import {
+  AlertCircle,
+  ArrowUpRight,
+  Check,
+  Clock3,
+  FilePlus2,
+  FileText,
+  LogOut,
+  Search,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { formatRelativeDate } from '@/lib/utils'
 import type { DocumentMeta } from '@/types'
@@ -15,39 +28,91 @@ interface Props {
 export default function DashboardClient({ documents: initialDocs, user }: Props) {
   const router = useRouter()
   const supabase = createSupabaseBrowserClient()
-  const [isPending, startTransition] = useTransition()
-  const [optimisticDocs, dispatchDocs] = useOptimistic(
-    initialDocs,
-    (state: DocumentMeta[], action: { type: 'add'; doc: DocumentMeta } | { type: 'delete'; id: string }) => {
-      if (action.type === 'add') return [action.doc, ...state]
-      if (action.type === 'delete') return state.filter((d) => d.id !== action.id)
-      return state
-    }
-  )
+  const [documents, setDocuments] = useState(initialDocs)
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [actionMessage, setActionMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null)
+
+  const displayName = user.full_name?.trim() || user.email?.split('@')[0] || 'there'
+  const initials = displayName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+
+  const filteredDocuments = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return documents
+    return documents.filter((doc) =>
+      `${doc.title} ${doc.content_text ?? ''}`.toLowerCase().includes(term)
+    )
+  }, [documents, search])
 
   async function handleCreateDocument() {
+    if (creating) return
     setCreating(true)
-    const { data, error } = await supabase
-      .from('documents')
-      .insert({ owner_id: user.id, title: 'Untitled Document' })
-      .select()
-      .single()
-    setCreating(false)
-    if (!error && data) {
-      router.push(`/doc/${data.id}`)
+    setActionMessage(null)
+
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .insert({ owner_id: user.id, title: 'Untitled Document' })
+        .select('id, title, content_text, created_at, updated_at, owner_id')
+        .single()
+
+      if (error) {
+        setActionMessage({
+          type: 'error',
+          text: `Couldn’t create your document. ${error.message}`,
+        })
+        return
+      }
+
+      const newDocument: DocumentMeta = {
+        id: data.id,
+        title: data.title,
+        content_text: data.content_text,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        owner_id: data.owner_id,
+      }
+      setDocuments((current) => [newDocument, ...current.filter((doc) => doc.id !== newDocument.id)])
+      setSearch('')
+      setActionMessage({ type: 'success', text: 'Document created. Open it below to start writing.' })
+    } catch (error) {
+      setActionMessage({
+        type: 'error',
+        text: error instanceof Error ? `Couldn’t create your document. ${error.message}` : 'Couldn’t create your document. Check your connection and try again.',
+      })
+    } finally {
+      setCreating(false)
     }
   }
 
   async function handleDeleteDocument(id: string) {
     setDeletingId(id)
-    startTransition(async () => {
-      dispatchDocs({ type: 'delete', id })
-      await supabase.from('documents').delete().eq('id', id)
+    setActionMessage(null)
+
+    try {
+      const { error } = await supabase.from('documents').delete().eq('id', id)
+      if (error) {
+        setActionMessage({ type: 'error', text: `Couldn’t delete this document. ${error.message}` })
+      } else {
+        setDocuments((current) => current.filter((doc) => doc.id !== id))
+        setActionMessage({ type: 'success', text: 'Document deleted.' })
+      }
+    } catch (error) {
+      setActionMessage({
+        type: 'error',
+        text: error instanceof Error ? `Couldn’t delete this document. ${error.message}` : 'Couldn’t delete this document. Check your connection and try again.',
+      })
+    } finally {
       setDeletingId(null)
-    })
+      setConfirmDeleteId(null)
+    }
   }
 
   async function handleLogout() {
@@ -55,181 +120,246 @@ export default function DashboardClient({ documents: initialDocs, user }: Props)
     router.push('/auth/login')
   }
 
-  const filtered = optimisticDocs.filter((d) =>
-    d.title.toLowerCase().includes(search.toLowerCase())
-  )
-
   return (
-    <div className="min-h-screen bg-background">
-      {/* ── Header ─────────────────────────────────────────────────── */}
-      <header className="border-b border-border sticky top-0 z-10 bg-background/80 backdrop-blur-sm">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
-              <svg viewBox="0 0 24 24" fill="white" className="w-4 h-4">
-                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z" />
-              </svg>
+    <div className="min-h-screen bg-[#f5f7fb] text-slate-900">
+      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
+        <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between px-5 sm:px-8">
+          <Link href="/dashboard" className="flex items-center gap-3" aria-label="CloudSync home">
+            <div className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-200/60">
+              <FileText className="h-5 w-5" strokeWidth={2.2} />
             </div>
-            <span className="font-bold text-lg">CloudSync</span>
-          </div>
+            <div>
+              <span className="block text-[15px] font-bold tracking-tight">CloudSync</span>
+              <span className="hidden text-[11px] font-medium text-slate-500 sm:block">Your writing workspace</span>
+            </div>
+          </Link>
 
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-muted-foreground hidden sm:block">
-              {user.full_name || user.email}
+          <div className="flex items-center gap-2 sm:gap-4">
+            <div className="hidden items-center gap-3 sm:flex">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-50 text-xs font-bold text-indigo-700 ring-1 ring-indigo-100">
+                {initials || 'U'}
+              </div>
+              <div className="max-w-40">
+                <p className="truncate text-sm font-semibold text-slate-800">{displayName}</p>
+                <p className="truncate text-xs text-slate-500">{user.email}</p>
+              </div>
             </div>
+            <div className="hidden h-8 w-px bg-slate-200 sm:block" />
             <button
               onClick={handleLogout}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg hover:bg-muted"
+              className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
             >
-              Sign out
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Sign out</span>
             </button>
           </div>
         </div>
       </header>
 
-      {/* ── Main Content ───────────────────────────────────────────── */}
-      <main className="max-w-6xl mx-auto px-6 py-10">
-        {/* Title + Create button */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-2xl font-bold">My Documents</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              {optimisticDocs.length} document{optimisticDocs.length !== 1 ? 's' : ''}
-            </p>
+      <main className="mx-auto max-w-7xl px-5 pb-16 pt-8 sm:px-8 sm:pt-11">
+        <section className="relative isolate overflow-hidden rounded-[28px] bg-gradient-to-br from-slate-950 via-indigo-950 to-violet-900 px-6 py-8 text-white shadow-xl shadow-indigo-950/10 sm:px-10 sm:py-10">
+          <div className="pointer-events-none absolute -right-16 -top-28 -z-10 h-80 w-80 rounded-full border-[48px] border-white/[0.06]" />
+          <div className="pointer-events-none absolute right-36 top-20 -z-10 h-40 w-40 rounded-full bg-violet-400/10 blur-3xl" />
+          <div className="relative flex flex-col justify-between gap-8 md:flex-row md:items-center">
+            <div className="max-w-2xl">
+              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.08] px-3 py-1.5 text-xs font-medium text-indigo-100">
+                <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                A little space for big ideas
+              </div>
+              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Good to see you, {displayName}.</h1>
+              <p className="mt-3 max-w-xl text-sm leading-6 text-indigo-100/75 sm:text-base">
+                Pick up where you left off or start something new. Your documents are ready whenever inspiration strikes.
+              </p>
+            </div>
+            <button
+              onClick={handleCreateDocument}
+              disabled={creating}
+              className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2.5 rounded-xl bg-white px-5 py-3 text-sm font-semibold text-indigo-950 shadow-lg shadow-black/10 transition hover:-translate-y-0.5 hover:bg-indigo-50 disabled:cursor-wait disabled:opacity-70"
+            >
+              {creating ? (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-900" />
+              ) : (
+                <FilePlus2 className="h-4 w-4" />
+              )}
+              {creating ? 'Creating document…' : 'New document'}
+            </button>
           </div>
+          <div className="mt-8 flex items-center gap-2 border-t border-white/10 pt-5 text-xs font-medium text-indigo-100/80">
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
+              <Check className="h-3.5 w-3.5" />
+            </span>
+            {documents.length} {documents.length === 1 ? 'document' : 'documents'} in your workspace
+          </div>
+        </section>
 
-          <button
-            onClick={handleCreateDocument}
-            disabled={creating}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0"
+        {actionMessage && (
+          <div
+            role={actionMessage.type === 'error' ? 'alert' : 'status'}
+            className={`mt-5 flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
+              actionMessage.type === 'error'
+                ? 'border-rose-200 bg-rose-50 text-rose-800'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            }`}
           >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-            </svg>
-            {creating ? 'Creating…' : 'New Document'}
-          </button>
-        </div>
-
-        {/* Search bar */}
-        {optimisticDocs.length > 0 && (
-          <div className="relative mb-6">
-            <svg viewBox="0 0 24 24" fill="currentColor" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground">
-              <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
-            </svg>
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search documents…"
-              className="w-full border border-input rounded-lg pl-10 pr-4 py-2.5 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-            />
+            {actionMessage.type === 'error' ? <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> : <Check className="mt-0.5 h-4 w-4 shrink-0" />}
+            <p className="min-w-0 flex-1">{actionMessage.text}</p>
+            <button onClick={() => setActionMessage(null)} className="rounded-md p-0.5 opacity-70 transition hover:opacity-100" aria-label="Dismiss message">
+              <X className="h-4 w-4" />
+            </button>
           </div>
         )}
 
-        {/* Document grid */}
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" fill="currentColor" className="w-8 h-8 text-muted-foreground">
-                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z" />
-              </svg>
+        <section className="mt-10 sm:mt-12">
+          <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-600">Your library</p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Recent documents</h2>
+              <p className="mt-1 text-sm text-slate-500">Everything you’ve been working on, all in one place.</p>
             </div>
-            <h3 className="text-lg font-semibold mb-1">
-              {search ? 'No documents match your search' : 'No documents yet'}
-            </h3>
-            <p className="text-muted-foreground text-sm mb-6">
-              {search ? 'Try a different search term' : 'Create your first document to get started'}
-            </p>
-            {!search && (
-              <button
-                onClick={handleCreateDocument}
-                disabled={creating}
-                className="bg-primary text-primary-foreground px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-primary/90 transition-colors"
-              >
-                Create Document
-              </button>
+
+            {documents.length > 0 && (
+              <label className="relative block w-full sm:w-72">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search documents"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm text-slate-800 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                />
+                {search && (
+                  <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-700" aria-label="Clear search">
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </label>
             )}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map((doc) => (
-              <DocumentCard
-                key={doc.id}
-                doc={doc}
-                isDeleting={deletingId === doc.id}
-                onDelete={() => handleDeleteDocument(doc.id)}
-              />
-            ))}
-          </div>
-        )}
+
+          {filteredDocuments.length > 0 ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filteredDocuments.map((doc, index) => (
+                <DocumentCard
+                  key={doc.id}
+                  doc={doc}
+                  index={index}
+                  isDeleting={deletingId === doc.id}
+                  isConfirmingDelete={confirmDeleteId === doc.id}
+                  onRequestDelete={() => setConfirmDeleteId(doc.id)}
+                  onCancelDelete={() => setConfirmDeleteId(null)}
+                  onDelete={() => void handleDeleteDocument(doc.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 px-6 py-14 text-center sm:py-16">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
+                {search ? <Search className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
+              </div>
+              <h3 className="mt-5 text-lg font-semibold text-slate-900">
+                {search ? 'No documents found' : 'Your first idea starts here'}
+              </h3>
+              <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">
+                {search
+                  ? 'Try another title or phrase to find the document you’re looking for.'
+                  : 'Create a document to capture a thought, plan a project, or work together with your team.'}
+              </p>
+              {!search && (
+                <button
+                  onClick={handleCreateDocument}
+                  disabled={creating}
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition hover:-translate-y-0.5 hover:bg-indigo-700 disabled:opacity-70"
+                >
+                  <FilePlus2 className="h-4 w-4" />
+                  {creating ? 'Creating…' : 'Create your first document'}
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+
+        <footer className="mt-12 flex items-center justify-center gap-2 text-xs text-slate-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          Your workspace is up to date
+        </footer>
       </main>
     </div>
   )
 }
 
+const iconStyles = [
+  'bg-indigo-50 text-indigo-600 ring-indigo-100',
+  'bg-sky-50 text-sky-600 ring-sky-100',
+  'bg-violet-50 text-violet-600 ring-violet-100',
+]
+
 function DocumentCard({
   doc,
+  index,
   isDeleting,
+  isConfirmingDelete,
+  onRequestDelete,
+  onCancelDelete,
   onDelete,
 }: {
   doc: DocumentMeta
+  index: number
   isDeleting: boolean
+  isConfirmingDelete: boolean
+  onRequestDelete: () => void
+  onCancelDelete: () => void
   onDelete: () => void
 }) {
-  const [confirmDelete, setConfirmDelete] = useState(false)
-
   return (
-    <div
-      className={`group relative bg-card border border-border rounded-xl p-5 hover:shadow-md transition-all ${
-        isDeleting ? 'opacity-50 pointer-events-none' : ''
-      }`}
-    >
-      <Link href={`/doc/${doc.id}`} className="block">
-        {/* Doc icon */}
-        <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-          <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-primary">
-            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z" />
-          </svg>
+    <article className={`group relative flex min-h-[218px] flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-950/[0.06] ${isDeleting ? 'pointer-events-none opacity-60' : ''}`}>
+      <div className="flex items-start justify-between">
+        <div className={`flex h-11 w-11 items-center justify-center rounded-[14px] ring-1 ${iconStyles[index % iconStyles.length]}`}>
+          <FileText className="h-5 w-5" />
         </div>
+        <div className="flex items-center gap-1">
+          <span className="rounded-full bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Document</span>
+          <button
+            onClick={onRequestDelete}
+            className="ml-1 rounded-lg p-2 text-slate-400 opacity-100 transition hover:bg-rose-50 hover:text-rose-600 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+            title="Delete document"
+            aria-label={`Delete ${doc.title}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
 
-        <h3 className="font-semibold text-sm truncate mb-1">{doc.title}</h3>
-        <p className="text-xs text-muted-foreground line-clamp-2 mb-3 min-h-[2.5rem]">
-          {doc.content_text?.slice(0, 120) || 'Empty document'}
+      <Link href={`/doc/${doc.id}`} className="mt-4 block flex-1 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2">
+        <h3 className="truncate text-base font-semibold text-slate-900 transition group-hover:text-indigo-700">{doc.title}</h3>
+        <p className="mt-2 min-h-10 text-sm leading-5 text-slate-500">
+          {doc.content_text?.trim()
+            ? `${doc.content_text.trim().slice(0, 105)}${doc.content_text.trim().length > 105 ? '…' : ''}`
+            : 'An empty page, ready for your next idea.'}
         </p>
-        <span className="text-xs text-muted-foreground">
-          {formatRelativeDate(doc.updated_at)}
-        </span>
+        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+          <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+            <Clock3 className="h-3.5 w-3.5" />
+            Edited {formatRelativeDate(doc.updated_at)}
+          </span>
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-400 transition group-hover:bg-indigo-50 group-hover:text-indigo-600">
+            <ArrowUpRight className="h-4 w-4" />
+          </span>
+        </div>
       </Link>
 
-      {/* Delete button */}
-      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-        {confirmDelete ? (
-          <div className="flex items-center gap-1">
-            <button
-              onClick={(e) => { e.preventDefault(); onDelete() }}
-              className="text-xs bg-destructive text-destructive-foreground px-2 py-1 rounded-md hover:bg-destructive/90"
-            >
-              Delete
-            </button>
-            <button
-              onClick={(e) => { e.preventDefault(); setConfirmDelete(false) }}
-              className="text-xs bg-muted px-2 py-1 rounded-md hover:bg-muted/80"
-            >
-              Cancel
-            </button>
+      {isConfirmingDelete && (
+        <div className="absolute inset-0 z-10 flex flex-col justify-center rounded-2xl bg-white/95 p-5 text-center backdrop-blur-sm">
+          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+            <Trash2 className="h-4 w-4" />
           </div>
-        ) : (
-          <button
-            onClick={(e) => { e.preventDefault(); setConfirmDelete(true) }}
-            className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-            title="Delete document"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-            </svg>
-          </button>
-        )}
-      </div>
-    </div>
+          <p className="mt-3 text-sm font-semibold text-slate-900">Delete this document?</p>
+          <p className="mt-1 truncate text-xs text-slate-500">{doc.title}</p>
+          <div className="mt-4 flex justify-center gap-2">
+            <button onClick={onCancelDelete} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition hover:bg-slate-50">Cancel</button>
+            <button onClick={onDelete} className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-rose-700">Delete</button>
+          </div>
+        </div>
+      )}
+    </article>
   )
 }
