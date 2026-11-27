@@ -103,4 +103,10 @@ create policy "Owner manages collaborators"
   using ((select private.is_document_owner(document_id)))
   with check ((select private.is_document_owner(document_id)));
 
+-- Table privileges are needed in addition to RLS policies. RLS continues
+-- to restrict the rows each signed-in user can access.
+grant select, insert, update, delete on public.documents to authenticated;
+grant select, insert, update, delete on public.document_collaborators to authenticated;
+grant select, update on public.profiles to authenticated;
+
 commit;

@@ -173,6 +173,12 @@ create policy "Owner manages collaborators"
   using ((select private.is_document_owner(document_id)))
   with check ((select private.is_document_owner(document_id)));
 
+-- Table privileges are required in addition to RLS policies. These grants
+-- let signed-in users attempt the operations above; RLS still limits rows.
+grant select, insert, update, delete on public.documents to authenticated;
+grant select, insert, update, delete on public.document_collaborators to authenticated;
+grant select, update on public.profiles to authenticated;
+
 -- ── Auto-update updated_at ──────────────────────────────────────────
 create or replace function public.update_updated_at()
 returns trigger as $$
