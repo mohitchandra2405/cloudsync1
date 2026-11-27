@@ -70,58 +70,108 @@ create table if not exists public.document_collaborators (
 
 alter table public.document_collaborators enable row level security;
 
+-- ── RLS helper functions ────────────────────────────────────────────
+-- These SECURITY DEFINER functions read the related table without
+-- re-entering its RLS policy, which breaks the documents/collaborators cycle.
+create schema if not exists private;
+grant usage on schema private to authenticated;
+
+create or replace function private.is_document_collaborator(p_document_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.document_collaborators as dc
+    where dc.document_id = p_document_id
+      and dc.user_id = (select auth.uid())
+  );
+$$;
+
+create or replace function private.is_document_editor(p_document_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.document_collaborators as dc
+    where dc.document_id = p_document_id
+      and dc.user_id = (select auth.uid())
+      and dc.role = 'editor'
+  );
+$$;
+
+create or replace function private.is_document_owner(p_document_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.documents as d
+    where d.id = p_document_id
+      and d.owner_id = (select auth.uid())
+  );
+$$;
+
+revoke all on function private.is_document_collaborator(uuid) from public, anon;
+revoke all on function private.is_document_editor(uuid) from public, anon;
+revoke all on function private.is_document_owner(uuid) from public, anon;
+grant execute on function private.is_document_collaborator(uuid) to authenticated;
+grant execute on function private.is_document_editor(uuid) to authenticated;
+grant execute on function private.is_document_owner(uuid) to authenticated;
+
 -- ── RLS: Documents ─────────────────────────────────────────────────
 -- Owners and collaborators can read
 create policy "Read own or shared documents"
-  on public.documents for select
+  on public.documents for select to authenticated
   using (
-    auth.uid() = owner_id
-    or exists (
-      select 1 from public.document_collaborators dc
-      where dc.document_id = id and dc.user_id = auth.uid()
-    )
+    (select auth.uid()) = owner_id
+    or (select private.is_document_collaborator(id))
   );
 
 -- Only owner can insert
 create policy "Owner inserts documents"
-  on public.documents for insert
-  with check (auth.uid() = owner_id);
+  on public.documents for insert to authenticated
+  with check ((select auth.uid()) = owner_id);
 
 -- Owner + editors can update
 create policy "Owner and editors update documents"
-  on public.documents for update
+  on public.documents for update to authenticated
   using (
-    auth.uid() = owner_id
-    or exists (
-      select 1 from public.document_collaborators dc
-      where dc.document_id = id and dc.user_id = auth.uid() and dc.role = 'editor'
-    )
+    (select auth.uid()) = owner_id
+    or (select private.is_document_editor(id))
+  )
+  with check (
+    (select auth.uid()) = owner_id
+    or (select private.is_document_editor(id))
   );
 
 -- Only owner can delete
 create policy "Owner deletes documents"
-  on public.documents for delete
-  using (auth.uid() = owner_id);
+  on public.documents for delete to authenticated
+  using ((select auth.uid()) = owner_id);
 
 -- ── RLS: Collaborators ─────────────────────────────────────────────
 create policy "Read collaborators of accessible documents"
-  on public.document_collaborators for select
+  on public.document_collaborators for select to authenticated
   using (
-    exists (
-      select 1 from public.documents d
-      where d.id = document_id
-        and (d.owner_id = auth.uid() or user_id = auth.uid())
-    )
+    user_id = (select auth.uid())
+    or (select private.is_document_owner(document_id))
   );
 
 create policy "Owner manages collaborators"
-  on public.document_collaborators for all
-  using (
-    exists (
-      select 1 from public.documents d
-      where d.id = document_id and d.owner_id = auth.uid()
-    )
-  );
+  on public.document_collaborators for all to authenticated
+  using ((select private.is_document_owner(document_id)))
+  with check ((select private.is_document_owner(document_id)));
 
 -- ── Auto-update updated_at ──────────────────────────────────────────
 create or replace function public.update_updated_at()
